@@ -1,5 +1,5 @@
 # A part of NonVisual Desktop Access (NVDA)
-# Copyright (C) 2025-2026 NV Access Limited, Antoine Haffreingue
+# Copyright (C) 2025-2026 NV Access Limited, Antoine Haffreingue, Cyrille Bougot
 # This file may be used under the terms of the GNU General Public License, version 2 or later, as modified by the NVDA license.
 # For full terms and any additional permissions, see the NVDA license file: https://github.com/nvaccess/nvda/blob/master/copying.txt
 
@@ -62,6 +62,8 @@ class FullScreenMagnifier(Magnifier):
 		Start the Full-screen magnifier using windows DLL
 		"""
 		super()._startMagnifier()
+		if not self._isActive:
+			return
 		if _isDebug():
 			log.debug(
 				f"Starting magnifier with zoom level {self.zoomLevel} and filter {self.filterType} and full-screen mode {self._fullscreenMode}",
@@ -84,38 +86,36 @@ class FullScreenMagnifier(Magnifier):
 			self._applyFilter()
 		self._startTimer(self._updateMagnifier)
 
+	def _clearStaleApiState(self) -> None:
+		"""
+		Dummy MagInitialize/MagUninitialize cycle to clear stale Windows API state.
+
+		After a MagSetFullscreenTransform or MagSetFullscreenColorEffect call,
+		MagUninitialize leaves internal state that causes the next MagSetFullscreenTransform
+		to fail. Resetting the color effect to neutral here also clears stale state
+		left by a screen curtain session. All OSError exceptions are suppressed.
+		"""
+		try:
+			magnification.MagInitialize()
+		except OSError:
+			return
+		try:
+			magnification.MagSetFullscreenColorEffect(FilterMatrix.NORMAL.value)
+		except OSError:
+			pass
+		try:
+			magnification.MagUninitialize()
+		except OSError:
+			pass
+
 	def _initializeNativeMagnification(self) -> None:
 		"""
 		Initialize the Magnification API and apply the initial fullscreen transform.
 
-		A dummy MagInitialize/MagUninitialize cycle is performed before the real
-		initialization. This is a workaround for a Windows bug: after a previous
-		MagSetFullscreenTransform call, MagUninitialize leaves internal state that
-		causes MagSetFullscreenTransform to fail with WinError 0 on the next
-		MagInitialize. A dummy cycle without any MagSetFullscreenTransform call
-		clears this stale state.
-
-		Errors during the dummy MagInitialize/MagUninitialize cycle are intentionally
-		suppressed.
-
-		Raises OSError if the real MagInitialize fails or if MagSetFullscreenTransform
-		fails (e.g. Windows Magnifier already holds the API).
+		Raises OSError if MagInitialize or MagSetFullscreenTransform fails.
 		"""
-		# Best-effort uninit ensures we start from a clean state
 		self._uninitializeNativeMagnification()
-		# Dummy cycle to clear any stale state from a previous MagSetFullscreenTransform.
-		dummyInitSucceeded = False
-		try:
-			magnification.MagInitialize()
-			dummyInitSucceeded = True
-		except OSError:
-			pass
-		finally:
-			if dummyInitSucceeded:
-				try:
-					magnification.MagUninitialize()
-				except OSError:
-					pass
+		self._clearStaleApiState()
 		magnification.MagInitialize()
 		if _isDebug():
 			log.debug("Magnification API initialized")
@@ -277,6 +277,19 @@ class FullScreenMagnifier(Magnifier):
 				return self._borderPos(coordinates)
 			case FullScreenMode.CENTER:
 				return coordinates
+
+	def _computeMagnifiedViewCenter(self) -> Coordinates:
+		"""
+		Compute the coordinates of the center of the currently magnified view.
+
+		:return: The (x, y) coordinates of the center of the magnified view
+		"""
+
+		coordinates = self._getCoordinatesForMode(self.currentCoordinates)
+		params = self._getMagnifierParameters(coordinates)
+		centerX = params.coordinates.x + params.magnifierSize.width // 2
+		centerY = params.coordinates.y + params.magnifierSize.height // 2
+		return Coordinates(centerX, centerY)
 
 	def _borderPos(
 		self,

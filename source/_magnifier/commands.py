@@ -150,6 +150,15 @@ def pan(action: MagnifierAction) -> None:
 			ui.message(PAN_ACTION_TO_EDGE_MESSAGES[action])
 
 
+def moveMouseToView() -> None:
+	"""
+	Move the mouse cursor to the center of the magnified view.
+	"""
+	magnifier: Magnifier = getMagnifier()
+	if magnifierIsActiveVerify(magnifier, MagnifierAction.MOVE_MOUSE_TO_VIEW):
+		magnifier.moveMouseToViewCenter()
+
+
 def toggleFilter() -> None:
 	"""Cycle through color filters"""
 	magnifier: Magnifier = getMagnifier()
@@ -260,7 +269,7 @@ def toggleAllFollow() -> None:
 
 
 def toggleFullscreenMode() -> None:
-	"""Cycle through full-screen focus modes (center, border, relative)"""
+	"""Cycle through full-screen modes (center, border, relative)"""
 	magnifier: Magnifier = getMagnifier()
 	if magnifierIsActiveVerify(
 		magnifier,

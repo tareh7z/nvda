@@ -1,5 +1,5 @@
 # A part of NonVisual Desktop Access (NVDA)
-# Copyright (C) 2025-2026 NV Access Limited, Antoine Haffreingue
+# Copyright (C) 2025-2026 NV Access Limited, Antoine Haffreingue, Cyrille Bougot
 # This file may be used under the terms of the GNU General Public License, version 2 or later, as modified by the NVDA license.
 # For full terms and any additional permissions, see the NVDA license file: https://github.com/nvaccess/nvda/blob/master/copying.txt
 
@@ -9,6 +9,7 @@ from _magnifier.magnifier import Magnifier
 from _magnifier.utils.types import Filter, FullScreenMode, MagnifiedView, Direction, Coordinates
 from _magnifier.fullscreenMagnifier import FullScreenMagnifier
 from tests.unit.test_magnifier.test_magnifier import _TestMagnifier
+from winAPI._displayTracking import getPrimaryDisplayOrientation
 
 
 class TestFullscreenMagnifierEndToEnd(_TestMagnifier):
@@ -237,12 +238,13 @@ class TestFullscreenMagnifierEndToEnd(_TestMagnifier):
 		self.mock_mag_fs.reset_mock()
 		magnifier._attemptRecovery()
 
-		# MagUninitialize: once best-effort at start + once in the dummy cycle finally block
+		# MagUninitialize: once best-effort uninit + once in _clearStaleApiState
 		self.assertEqual(self.mock_mag_fs.MagUninitialize.call_count, 2)
-		# MagInitialize: once in the dummy cycle + once for the real init
+		# MagInitialize: once in _clearStaleApiState + once for the real init
 		self.assertEqual(self.mock_mag_fs.MagInitialize.call_count, 2)
 		self.mock_mag_fs.MagSetFullscreenTransform.assert_called_once_with(magnifier.zoomLevel / 100.0, 0, 0)
-		self.mock_mag_fs.MagSetFullscreenColorEffect.assert_called_once()
+		# MagSetFullscreenColorEffect: once in _clearStaleApiState + once in _attemptRecovery
+		self.assertEqual(self.mock_mag_fs.MagSetFullscreenColorEffect.call_count, 2)
 		self.assertEqual(magnifier._consecutiveErrors, 0)
 		magnifier._startTimer.assert_called_once_with(magnifier._updateMagnifier)
 
@@ -288,14 +290,11 @@ class TestFullscreenMagnifierEndToEnd(_TestMagnifier):
 		magnifier._stopMagnifier()
 
 
-class TestFullScreenMagnifierApiConflict(_TestMagnifier):
-	"""Tests for Windows Magnification API conflict detection at startup and during recovery."""
+class TestFullScreenMagnifierApi(_TestMagnifier):
+	"""Tests for FullScreenMagnifier interactions with the Windows Magnification API."""
 
 	def testCannotStartWhenWindowsMagnifierRunning(self):
-		"""
-		MagInitialize succeeds but MagSetFullscreenTransform fails: Windows Magnifier is running.
-		NVDA Magnifier must not start, the user must be notified, and no timer must be started.
-		"""
+		"""MagSetFullscreenTransform fails because Windows Magnifier is running: magnifier must not start."""
 		self.mock_mag_fs.MagSetFullscreenTransform.side_effect = OSError("API in use by another magnifier")
 
 		with patch("_magnifier.fullscreenMagnifier.ui.message") as mock_message:
@@ -307,9 +306,7 @@ class TestFullScreenMagnifierApiConflict(_TestMagnifier):
 		self.assertIsNone(magnifier._timer)
 
 	def testCannotStartWhenMagInitializeFails(self):
-		"""
-		MagInitialize itself fails: NVDA Magnifier must not start and the user must be notified.
-		"""
+		"""MagInitialize fails: magnifier must not start and the user must be notified."""
 		self.mock_mag_fs.MagInitialize.side_effect = OSError("Cannot initialize magnification API")
 
 		with patch("_magnifier.fullscreenMagnifier.ui.message") as mock_message:
@@ -321,9 +318,7 @@ class TestFullScreenMagnifierApiConflict(_TestMagnifier):
 		self.assertIsNone(magnifier._timer)
 
 	def testRecoveryCapStopsMagnifier(self):
-		"""
-		After _MAX_RECOVERY_ATTEMPTS failed attempts, the magnifier stops and the user is notified.
-		"""
+		"""After _MAX_RECOVERY_ATTEMPTS failed attempts, the magnifier stops and the user is notified."""
 		magnifier = FullScreenMagnifier()
 		magnifier._recoveryAttempts = FullScreenMagnifier._MAX_RECOVERY_ATTEMPTS
 
@@ -334,10 +329,7 @@ class TestFullScreenMagnifierApiConflict(_TestMagnifier):
 		mock_message.assert_called_once()
 
 	def testRecoveryFailsWhenTransformStillUnavailable(self):
-		"""
-		Recovery declares failure if MagSetFullscreenTransform still raises after reinit.
-		This is the root cause of the Windows Magnifier conflict infinite loop.
-		"""
+		"""Recovery declares failure if MagSetFullscreenTransform still raises after reinit."""
 		magnifier = FullScreenMagnifier()
 		magnifier._startTimer = MagicMock()
 
@@ -348,3 +340,36 @@ class TestFullScreenMagnifierApiConflict(_TestMagnifier):
 
 		self.assertFalse(magnifier._isActive)
 		magnifier._startTimer.assert_not_called()
+
+
+class TestFullScreenMagnifierMoveMouseToViewCenter(_TestMagnifier):
+	"""Tests for moveMouseToViewCenter in FullScreenMagnifier."""
+
+	def setUp(self):
+		super().setUp()
+		self.magnifier = FullScreenMagnifier()
+		self.magnifier._startMagnifier()
+		self.screen = getPrimaryDisplayOrientation()
+
+	def tearDown(self):
+		self.magnifier._stopMagnifier()
+		super().tearDown()
+
+	def _expectedCenter(self, rawCoords: Coordinates) -> tuple[int, int]:
+		"""Compute the expected cursor position using the same pipeline as _computeMagnifiedViewCenter."""
+		coords = self.magnifier._getCoordinatesForMode(rawCoords)
+		params = self.magnifier._getMagnifierParameters(coords)
+		return (
+			params.coordinates.x + params.magnifierSize.width // 2,
+			params.coordinates.y + params.magnifierSize.height // 2,
+		)
+
+	def testMoveMouseToViewCenterPlacesCursorAtCenter(self):
+		"""moveMouseToViewCenter places cursor at the computed view center."""
+		self.magnifier._fullscreenMode = FullScreenMode.CENTER
+		raw = Coordinates(self.screen.width // 2, self.screen.height // 2)
+		self.magnifier._currentCoordinates = raw
+		expectedX, expectedY = self._expectedCenter(raw)
+		with patch("_magnifier.magnifier.winUser.setCursorPos") as mockSet:
+			self.magnifier.moveMouseToViewCenter()
+			mockSet.assert_called_once_with(expectedX, expectedY)

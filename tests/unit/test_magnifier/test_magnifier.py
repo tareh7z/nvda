@@ -1,5 +1,5 @@
 # A part of NonVisual Desktop Access (NVDA)
-# Copyright (C) 2025-2026 NV Access Limited, Antoine Haffreingue
+# Copyright (C) 2025-2026 NV Access Limited, Antoine Haffreingue, Cyrille Bougot
 # This file may be used under the terms of the GNU General Public License, version 2 or later, as modified by the NVDA license.
 # For full terms and any additional permissions, see the NVDA license file: https://github.com/nvaccess/nvda/blob/master/copying.txt
 
@@ -38,6 +38,15 @@ class _TestMagnifier(unittest.TestCase):
 		"""Cleanup after each test."""
 		self.mag_fs_patcher.stop()
 		self.mag_patcher.stop()
+
+	def _mockScreenCurtain(self, enabled: bool):
+		"""Patch screenCurtain module so .screenCurtain.enabled returns the given value."""
+		mock_instance = MagicMock()
+		mock_instance.enabled = enabled
+		patcher = patch("_magnifier.magnifier.screenCurtain")
+		mock_module = patcher.start()
+		self.addCleanup(patcher.stop)
+		mock_module.screenCurtain = mock_instance
 
 
 class TestMagnifier(_TestMagnifier):
@@ -473,6 +482,11 @@ class TestMagnifier(_TestMagnifier):
 		self.assertFalse(self.magnifier._isManualPanning)
 		self.assertEqual(self.magnifier._lastFocusCoordinates, focusB)
 
+	def testComputeMagnifiedViewCenterRaisesNotImplemented(self):
+		"""Base _computeMagnifiedViewCenter must raise NotImplementedError."""
+		with self.assertRaises(NotImplementedError):
+			self.magnifier._computeMagnifiedViewCenter()
+
 	def testStartTimer(self):
 		"""Starting the timer."""
 		self.magnifier._stopTimer = MagicMock()
@@ -539,3 +553,63 @@ class TestMagnifier(_TestMagnifier):
 			validCoords = Coordinates(centerX, centerY)
 			self.magnifier.currentCoordinates = validCoords
 			self.assertEqual(self.magnifier.currentCoordinates, validCoords)
+
+	def testStartBlockedByScreenCurtain(self):
+		"""When screen curtain is active, _startMagnifier must not set _isActive."""
+		self._mockScreenCurtain(enabled=True)
+		with patch("NVDAState._TrackNVDAInitialization.isInitializationComplete", return_value=True):
+			with patch("_magnifier.magnifier.ui.message"):
+				self.magnifier._startMagnifier()
+
+		self.assertFalse(self.magnifier._isActive)
+
+	def testStartBlockedAtStartupSetsFlag(self):
+		"""At NVDA startup, screen curtain blocks silently and sets _screenCurtainIsActive."""
+		self._mockScreenCurtain(enabled=True)
+		with patch("NVDAState._TrackNVDAInitialization.isInitializationComplete", return_value=False):
+			with patch("_magnifier.magnifier.ui.message") as mock_message:
+				self.magnifier._startMagnifier()
+
+		self.assertFalse(self.magnifier._isActive)
+		self.assertTrue(self.magnifier._screenCurtainIsActive)
+		mock_message.assert_not_called()
+
+	def testOnScreenCurtainEnabledStopsMagnifier(self):
+		"""When screen curtain is enabled while magnifier is active, magnifier stops."""
+		self.magnifier._isActive = True
+
+		with patch("_magnifier.magnifier.ui.message"):
+			self.magnifier.onScreenCurtainEnabled()
+
+		self.assertFalse(self.magnifier._isActive)
+		self.assertTrue(self.magnifier._screenCurtainIsActive)
+
+	def testOnScreenCurtainEnabledWhenInactive(self):
+		"""When screen curtain is enabled while magnifier is already inactive, _screenCurtainIsActive is False."""
+		self.assertFalse(self.magnifier._isActive)
+
+		self.magnifier.onScreenCurtainEnabled()
+
+		self.assertFalse(self.magnifier._screenCurtainIsActive)
+
+	def testOnScreenCurtainDisabledRestartsMagnifier(self):
+		"""When screen curtain is disabled and _screenCurtainIsActive is True, magnifier restarts."""
+		self.magnifier._screenCurtainIsActive = True
+		self.magnifier._startMagnifier = MagicMock()
+		self.magnifier._updateMagnifier = MagicMock()
+
+		with patch("_magnifier.magnifier.ui.message"):
+			self.magnifier.onScreenCurtainDisabled()
+
+		self.magnifier._startMagnifier.assert_called_once()
+		self.magnifier._updateMagnifier.assert_called_once()
+		self.assertFalse(self.magnifier._screenCurtainIsActive)
+
+	def testOnScreenCurtainDisabledDoesNothingWhenFlagIsFalse(self):
+		"""When screen curtain is disabled but _screenCurtainIsActive is False, nothing happens."""
+		self.magnifier._screenCurtainIsActive = False
+		self.magnifier._startMagnifier = MagicMock()
+
+		self.magnifier.onScreenCurtainDisabled()
+
+		self.magnifier._startMagnifier.assert_not_called()
