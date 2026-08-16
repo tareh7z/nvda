@@ -7,11 +7,13 @@
 Full-screen magnifier module.
 """
 
+from ctypes import byref
+from ctypes.wintypes import RECT
 from typing import override
 
 from logHandler import log
-import speech
 import ui
+import systemUtils
 from winBindings import magnification
 from .magnifier import Magnifier
 from .utils.filterHandler import FilterMatrix
@@ -25,7 +27,7 @@ from .utils.types import (
 	Coordinates,
 )
 from .config import getFullscreenMode, isTrueCentered, _isDebug
-from .utils.errorHandling import trackNativeMagnifierErrors
+from .utils.errorHandling import trackNativeMagnifierErrors, MagnifierStartError
 
 
 class FullScreenMagnifier(Magnifier):
@@ -40,6 +42,12 @@ class FullScreenMagnifier(Magnifier):
 		self.currentCoordinates = Coordinates(0, 0)
 		self._spotlightManager = SpotlightManager(self)
 		self._displaySize = Size(self._displayOrientation.width, self._displayOrientation.height)
+		self._inputTransformSupported = systemUtils.hasUiAccess()
+
+	@staticmethod
+	def _isAccessDeniedError(error: OSError) -> bool:
+		"""Return True when OSError represents Windows access denied (WinError 5)."""
+		return getattr(error, "winerror", None) == 5
 
 	@Magnifier.filterType.setter
 	def filterType(self, value: Filter) -> None:
@@ -62,9 +70,11 @@ class FullScreenMagnifier(Magnifier):
 		Start the Full-screen magnifier using windows DLL
 		"""
 		super()._startMagnifier()
+		if not self._isActive:
+			return
 		if _isDebug():
 			log.debug(
-				f"Starting magnifier with zoom level {self.zoomLevel} and filter {self.filterType} and full-screen mode {self._fullscreenMode}",
+				f"Starting magnifier with zoom level {self.zoomLevel} and filter {self.filterType} and full-screen tracking mode {self._fullscreenMode}",
 			)
 		try:
 			self._initializeNativeMagnification()
@@ -72,50 +82,48 @@ class FullScreenMagnifier(Magnifier):
 			log.exception("Failed to initialize magnification API")
 			# _isActive is True from super(), so _stopMagnifier properly unregisters
 			self._stopMagnifier()
-			message = pgettext(
-				"magnifier",
-				# Translators: Message when NVDA's Magnifier cannot start because another magnifier is already running.
-				"Cannot start magnifier. Another magnifier application may already be running.",
+			raise MagnifierStartError(
+				pgettext(
+					"magnifier",
+					# Translators: Message when NVDA's Magnifier cannot start because another magnifier is already running.
+					"Cannot start magnifier. Another magnifier application may already be running.",
+				),
 			)
-			ui.message(message, speechPriority=speech.priorities.Spri.NOW)
-			return
 
 		if self._isActive:
 			self._applyFilter()
 		self._startTimer(self._updateMagnifier)
 
+	def _clearStaleApiState(self) -> None:
+		"""
+		Dummy MagInitialize/MagUninitialize cycle to clear stale Windows API state.
+
+		After a MagSetFullscreenTransform or MagSetFullscreenColorEffect call,
+		MagUninitialize leaves internal state that causes the next MagSetFullscreenTransform
+		to fail. Resetting the color effect to neutral here also clears stale state
+		left by a screen curtain session. All OSError exceptions are suppressed.
+		"""
+		try:
+			magnification.MagInitialize()
+		except OSError:
+			return
+		try:
+			magnification.MagSetFullscreenColorEffect(FilterMatrix.NORMAL.value)
+		except OSError:
+			pass
+		try:
+			magnification.MagUninitialize()
+		except OSError:
+			pass
+
 	def _initializeNativeMagnification(self) -> None:
 		"""
 		Initialize the Magnification API and apply the initial fullscreen transform.
 
-		A dummy MagInitialize/MagUninitialize cycle is performed before the real
-		initialization. This is a workaround for a Windows bug: after a previous
-		MagSetFullscreenTransform call, MagUninitialize leaves internal state that
-		causes MagSetFullscreenTransform to fail with WinError 0 on the next
-		MagInitialize. A dummy cycle without any MagSetFullscreenTransform call
-		clears this stale state.
-
-		Errors during the dummy MagInitialize/MagUninitialize cycle are intentionally
-		suppressed.
-
-		Raises OSError if the real MagInitialize fails or if MagSetFullscreenTransform
-		fails (e.g. Windows Magnifier already holds the API).
+		Raises OSError if MagInitialize or MagSetFullscreenTransform fails.
 		"""
-		# Best-effort uninit ensures we start from a clean state
 		self._uninitializeNativeMagnification()
-		# Dummy cycle to clear any stale state from a previous MagSetFullscreenTransform.
-		dummyInitSucceeded = False
-		try:
-			magnification.MagInitialize()
-			dummyInitSucceeded = True
-		except OSError:
-			pass
-		finally:
-			if dummyInitSucceeded:
-				try:
-					magnification.MagUninitialize()
-				except OSError:
-					pass
+		self._clearStaleApiState()
 		magnification.MagInitialize()
 		if _isDebug():
 			log.debug("Magnification API initialized")
@@ -159,6 +167,15 @@ class FullScreenMagnifier(Magnifier):
 		- Position: 0,0
 		- Color effect: normal (identity matrix)
 		"""
+		if self._inputTransformSupported:
+			destRect = RECT(0, 0, self._displayOrientation.width, self._displayOrientation.height)
+			try:
+				magnification.MagSetInputTransform(False, byref(destRect), byref(destRect))
+			except OSError as e:
+				if self._isAccessDeniedError(e):
+					self._inputTransformSupported = False
+				else:
+					raise
 		magnification.MagSetFullscreenTransform(1.0, 0, 0)
 		magnification.MagSetFullscreenColorEffect(FilterMatrix.NORMAL.value)
 		if _isDebug():
@@ -258,6 +275,25 @@ class FullScreenMagnifier(Magnifier):
 			params.coordinates.x,
 			params.coordinates.y,
 		)
+		if self._inputTransformSupported:
+			sourceRect = RECT(
+				params.coordinates.x,
+				params.coordinates.y,
+				params.coordinates.x + params.magnifierSize.width,
+				params.coordinates.y + params.magnifierSize.height,
+			)
+			destRect = RECT(0, 0, self._displayOrientation.width, self._displayOrientation.height)
+			try:
+				magnification.MagSetInputTransform(True, byref(sourceRect), byref(destRect))
+			except OSError as e:
+				if self._isAccessDeniedError(e):
+					self._inputTransformSupported = False
+					log.debugWarning(
+						"MagSetInputTransform unavailable (UIAccess required). Continuing without input transform.",
+						exc_info=e,
+					)
+				else:
+					raise
 
 	def _getCoordinatesForMode(
 		self,
@@ -273,8 +309,6 @@ class FullScreenMagnifier(Magnifier):
 		match self._fullscreenMode:
 			case FullScreenMode.RELATIVE:
 				return self._relativePos(coordinates)
-			case FullScreenMode.BORDER:
-				return self._borderPos(coordinates)
 			case FullScreenMode.CENTER:
 				return coordinates
 
@@ -290,51 +324,6 @@ class FullScreenMagnifier(Magnifier):
 		centerX = params.coordinates.x + params.magnifierSize.width // 2
 		centerY = params.coordinates.y + params.magnifierSize.height // 2
 		return Coordinates(centerX, centerY)
-
-	def _borderPos(
-		self,
-		coordinates: Coordinates,
-	) -> Coordinates:
-		"""
-		Check if focus is near magnifier border and adjust position accordingly
-		Returns adjusted position to keep focus within margin limits
-
-		:param coordinates: Raw coordinates (x, y)
-
-		:return: The adjusted position (x, y) of the focus point
-		"""
-		focusX, focusY = coordinates
-		params = self._getMagnifierParameters(self._lastScreenPosition)
-		magnifierWidth = params.magnifierSize.width
-		magnifierHeight = params.magnifierSize.height
-		lastLeft = params.coordinates.x
-		lastTop = params.coordinates.y
-
-		minX = lastLeft + self._MARGIN_BORDER
-		maxX = lastLeft + magnifierWidth - self._MARGIN_BORDER
-		minY = lastTop + self._MARGIN_BORDER
-		maxY = lastTop + magnifierHeight - self._MARGIN_BORDER
-
-		dx = 0
-		dy = 0
-
-		if focusX < minX:
-			dx = focusX - minX
-		elif focusX > maxX:
-			dx = focusX - maxX
-
-		if focusY < minY:
-			dy = focusY - minY
-		elif focusY > maxY:
-			dy = focusY - maxY
-
-		if dx != 0 or dy != 0:
-			return Coordinates(
-				self._lastScreenPosition.x + dx,
-				self._lastScreenPosition.y + dy,
-			)
-		else:
-			return self._lastScreenPosition
 
 	def _relativePos(
 		self,
