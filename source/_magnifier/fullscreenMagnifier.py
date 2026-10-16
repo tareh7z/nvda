@@ -11,23 +11,25 @@ from ctypes import byref
 from ctypes.wintypes import RECT
 from typing import override
 
-from logHandler import log
-import ui
 import systemUtils
+import ui
+from logHandler import log
+from utils.debounce import PREVENT_THREE_HZ_FLASH_MS, debounceLimiter
 from winBindings import magnification
+
+from .config import _isDebug, getFullscreenMode, isTrueCentered
 from .magnifier import Magnifier
+from .utils.errorHandling import MagnifierStartError, trackNativeMagnifierErrors
 from .utils.filterHandler import FilterMatrix
 from .utils.spotlightManager import SpotlightManager
 from .utils.types import (
-	Filter,
-	MagnifiedView,
-	FullScreenMode,
-	Size,
-	MagnifierParameters,
 	Coordinates,
+	Filter,
+	FullScreenMode,
+	MagnifiedView,
+	MagnifierParameters,
+	Size,
 )
-from .config import getFullscreenMode, isTrueCentered, _isDebug
-from .utils.errorHandling import trackNativeMagnifierErrors, MagnifierStartError
 
 
 class FullScreenMagnifier(Magnifier):
@@ -219,7 +221,7 @@ class FullScreenMagnifier(Magnifier):
 			self._initializeNativeMagnification()
 			magnification.MagSetFullscreenColorEffect(self._getFilterMatrix().value)
 		except OSError:
-			log.error("Recovery failed", exc_info=True)
+			log.error("Recovery failed", exc_info=True)  # noqa: G201
 			self._conductRecoveryFailure()
 			return
 
@@ -251,6 +253,10 @@ class FullScreenMagnifier(Magnifier):
 			case Filter.INVERTED:
 				return FilterMatrix.INVERTED
 
+	@debounceLimiter(
+		cooldownTimeMs=PREVENT_THREE_HZ_FLASH_MS,
+		delayTimeMs=PREVENT_THREE_HZ_FLASH_MS,
+	)
 	@trackNativeMagnifierErrors
 	def _applyFilter(self) -> None:
 		"""

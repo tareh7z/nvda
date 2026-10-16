@@ -5,7 +5,7 @@
 
 """Functions exported by kernel32.dll, and supporting data structures and enumerations."""
 
-from ctypes import (
+from ctypes import (  # noqa: I001
 	WINFUNCTYPE,
 	Structure,
 	c_void_p,
@@ -57,87 +57,101 @@ LPSECURITY_ATTRIBUTES = POINTER(SECURITY_ATTRIBUTES)
 
 
 __all__ = (
-	"GetModuleHandle",
-	"GetModuleFileName",
-	"LoadLibraryEx",
-	"FreeLibrary",
+	"AttachConsole",
+	"CancelIoEx",
+	"CancelWaitableTimer",
 	"CloseHandle",
-	"ReleaseMutex",
-	"WaitForSingleObject",
-	"OpenProcess",
-	"VirtualAllocEx",
-	"VirtualFreeEx",
-	"ReadProcessMemory",
-	"WriteProcessMemory",
+	"CopyFile",
+	"CreateEvent",
+	"CreateFile",
+	"CreateMutex",
+	"CreatePipe",
+	"CreateWaitableTimer",
+	"DuplicateHandle",
+	"FileTimeToSystemTime",
+	"FreeConsole",
+	"FreeLibrary",
+	"GetACP",
+	"GetConsoleProcessList",
+	"GetConsoleScreenBufferInfo",
+	"GetConsoleSelectionInfo",
+	"GetConsoleWindow",
+	"GetCurrentProcess",
+	"GetCurrentThreadId",
+	"GetDateFormatEx",
+	"GetDriveType",
+	"GetExitCodeProcess",
+	"GetLastError",
+	"GetLocaleInfo",
+	"GetModuleFileName",
+	"GetModuleHandle",
+	"GetModuleHandleEx",
+	"GetOverlappedResult",
+	"GetPackageFullName",
+	"GetProcessInformation",
+	"GetStdHandle",
+	"GetSystemPowerStatus",
+	"GetThreadLocale",
+	"GetTimeFormatEx",
+	"GetUserDefaultUILanguage",
 	"GlobalAlloc",
 	"GlobalFree",
 	"GlobalLock",
 	"GlobalUnlock",
-	"GetCurrentProcess",
-	"SetUnhandledExceptionFilter",
-	"GetCurrentThreadId",
-	"OpenThread",
-	"QueueUserAPC",
-	"CreateEvent",
-	"CreateMutex",
-	"CreateWaitableTimer",
-	"SetEvent",
-	"ResetEvent",
-	"SetWaitableTimer",
-	"CancelWaitableTimer",
-	"WaitForMultipleObjects",
-	"SleepEx",
-	"SetThreadExecutionState",
-	"ReadFileEx",
-	"WriteFile",
-	"GetOverlappedResult",
-	"CancelIoEx",
-	"WaitCommEvent",
-	"CopyFile",
-	"GetLocaleInfo",
-	"LocaleNameToLCID",
-	"GetUserDefaultUILanguage",
-	"AttachConsole",
-	"FreeConsole",
-	"GetConsoleWindow",
-	"GetConsoleProcessList",
-	"GetConsoleScreenBufferInfo",
-	"GetConsoleSelectionInfo",
-	"ReadConsoleOutputCharacter",
-	"ReadConsoleOutput",
-	"SetConsoleCtrlHandler",
-	"GetModuleHandleEx",
-	"GetPackageFullName",
-	"QueryFullProcessImageName",
 	"IsWow64Process",
 	"IsWow64Process2",
-	"GetProcessInformation",
+	"LCIDToLocaleName",
+	"LoadLibraryEx",
+	"LocaleNameToLCID",
+	"MoveFileEx",
+	"OpenProcess",
+	"OpenThread",
+	"QueryFullProcessImageName",
+	"QueueUserAPC",
+	"ReadConsoleOutput",
+	"ReadConsoleOutputCharacter",
+	"ReadFileEx",
+	"ReadProcessMemory",
 	"RegisterApplicationRestart",
-	"GetLastError",
-	"GetStdHandle",
-	"CreateFile",
-	"GetSystemPowerStatus",
-	"GetThreadLocale",
+	"ReleaseMutex",
+	"ResetEvent",
+	"SetConsoleCtrlHandler",
+	"SetEvent",
+	"SetProcessShutdownParameters",
+	"SetThreadExecutionState",
+	"SetUnhandledExceptionFilter",
+	"SetWaitableTimer",
+	"SleepEx",
+	"SystemTimeToTzSpecificLocalTime",
+	"TerminateProcess",
+	"VirtualAllocEx",
+	"VirtualFreeEx",
+	"WaitCommEvent",
+	"WaitForMultipleObjects",
+	"WaitForSingleObject",
+	"WaitForSingleObjectEx",
 	"Wow64DisableWow64FsRedirection",
 	"Wow64RevertWow64FsRedirection",
-	"FileTimeToSystemTime",
-	"SystemTimeToTzSpecificLocalTime",
-	"GetDateFormatEx",
-	"GetTimeFormatEx",
-	"WaitForSingleObjectEx",
-	"SetProcessShutdownParameters",
-	"GetExitCodeProcess",
-	"TerminateProcess",
-	"GetDriveType",
-	"CreatePipe",
-	"DuplicateHandle",
-	"MoveFileEx",
-	"LCIDToLocaleName",
-	"GetACP",
+	"WriteFile",
+	"WriteProcessMemory",
 )
 
 
 dll = windll.kernel32
+
+
+class GENERIC(IntEnum):
+	"""Access rights which  are mapped to sets of standard and object-specific access rights by securable objects.
+
+	..seealso::
+		https://learn.microsoft.com/en-us/windows/win32/secauthz/generic-access-rights
+	"""
+
+	#: Write access.
+	WRITE = 0x40000000
+	#: Read access.
+	READ = 0x80000000
+
 
 GetModuleHandle = WINFUNCTYPE(None)(("GetModuleHandleW", dll))
 """
@@ -299,6 +313,17 @@ WriteProcessMemory.argtypes = (
 	POINTER(c_size_t),  # lpNumberOfBytesWritten
 )
 WriteProcessMemory.restype = BOOL
+
+
+class DUPLICATE(IntEnum):
+	"""Possible values of the dwOptions parameter to DuplicateHandle."""
+
+	CLOSE_SOURCE = 0x00000001
+	"""Closes the source handle, regardless of any error status returned."""
+
+	SAME_ACCESS = 0x00000002
+	"""The duplicate handle has the same access as the source handle, and the dwDesiredAccess parameter is ignored."""
+
 
 DuplicateHandle = WINFUNCTYPE(None)(("DuplicateHandle", dll))
 """
